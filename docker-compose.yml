@@ -1,0 +1,108 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: auth-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: auth_service
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./db/schema.sql:/docker-entrypoint-initdb.d/001-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d auth_service"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+  redis:
+    image: redis:7-alpine
+    container_name: auth-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 3s
+
+  app-1:
+    build:
+      context: .
+    container_name: auth-app-1
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: on-failure
+    environment: &app_env
+      PORT: "8080"
+      APP_NAME: "auth-service"
+      APP_INSTANCE_NAME: "app-1"
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DB_NAME: auth_service
+      DB_SSLMODE: disable
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD: ""
+      REDIS_DB: "0"
+      JWT_ACCESS_SECRET: change-this-in-production
+      JWT_ACCESS_TTL_MINUTES: "15"
+      REFRESH_TOKEN_TTL_HOURS: "168"
+      COOKIE_DOMAIN: ""
+      COOKIE_SECURE: "false"
+      COOKIE_SAMESITE: Lax
+      LOGIN_RATE_LIMIT_REQUESTS: "5"
+      LOGIN_RATE_LIMIT_WINDOW_SECONDS: "60"
+      REGISTER_RATE_LIMIT_REQUESTS: "3"
+      REGISTER_RATE_LIMIT_WINDOW_SECONDS: "60"
+      REFRESH_RATE_LIMIT_REQUESTS: "10"
+      REFRESH_RATE_LIMIT_WINDOW_SECONDS: "60"
+    ports:
+      - "8081:8080"
+
+  app-2:
+    build:
+      context: .
+    container_name: auth-app-2
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: on-failure
+    environment:
+      <<: *app_env
+      APP_INSTANCE_NAME: "app-2"
+    ports:
+      - "8082:8080"
+
+  app-3:
+    build:
+      context: .
+    container_name: auth-app-3
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: on-failure
+    environment:
+      <<: *app_env
+      APP_INSTANCE_NAME: "app-3"
+    ports:
+      - "8083:8080"
+
+volumes:
+  postgres_data:
+  redis_data:

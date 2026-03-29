@@ -1,0 +1,13 @@
+.git
+.gitignore
+.env
+.vscode
+bin
+dist
+tmp
+coverage
+coverage.out
+*.log
+*.test
+cookies.txt
+README.md
