@@ -1,51 +1,16 @@
 # Auth Login Load Balancing
 
-A production-oriented authentication service built with Go, PostgreSQL, Redis, Docker, and Nginx.
-
-This project started as a clean login foundation and grew into a stateless authentication system with:
-
-- user registration and login
-- JWT access tokens
-- refresh token rotation
-- session management
-- logout and logout-all
-- audit logging
-- Redis-backed rate limiting
-- local multi-instance deployment behind Nginx
-
-## Tech Stack
-
-- Go (`net/http`)
-- PostgreSQL
-- Redis
-- Docker
-- Nginx
-
-## Why `net/http`
-
-The project uses the Go standard library HTTP stack to keep the service lightweight, explicit, and easy to scale without framework lock-in. That makes the codebase easier to reason about while still being production-friendly.
+A production-ready Go authentication service with PostgreSQL, Redis, Docker, and Nginx load balancing. The app stays stateless so multiple containers can sit behind a reverse proxy, while PostgreSQL stores durable auth data and Redis stores refresh-token/runtime state.
 
 ## Features
 
-- `POST /auth/register`
-- `POST /auth/login`
-- `POST /auth/refresh`
-- `POST /auth/logout`
-- `POST /auth/logout-all`
-- `GET /auth/me`
-- `GET /auth/sessions`
-- `DELETE /auth/sessions/:id`
-- `GET /health`
-
-Security-related features:
-
-- bcrypt password hashing
-- JWT short-lived access token
-- opaque refresh token stored in `HttpOnly` cookie
-- refresh token rotation and reuse detection
-- Redis-backed token/session state
-- Redis-backed rate limiting for register, login, and refresh
-- PostgreSQL audit logs for important auth events
+- Register, login, refresh, logout, logout-all, profile, and session management endpoints
+- JWT access tokens with issuer/audience validation
+- HttpOnly refresh-token cookies with rotation and reuse detection
+- PostgreSQL-backed users, sessions, and audit logs
+- Redis-backed refresh-token state and auth rate limiting
+- JSON responses, request IDs, structured logs, timeouts, and recovery middleware
+- Docker image healthcheck and Nginx reverse proxy/load balancer
 
 ## Project Structure
 
@@ -53,7 +18,8 @@ Security-related features:
 .
 |-- cmd/server
 |-- db
-|-- deploy/nginx
+|-- deploy/aws
+|-- infra/nginx
 |-- internal/config
 |-- internal/database
 |-- internal/handler
@@ -62,142 +28,39 @@ Security-related features:
 |-- internal/repository
 |-- internal/service
 |-- Dockerfile
-`-- docker-compose.yml
+|-- docker-compose.yml
+|-- docker-compose.prod.yml
+|-- Makefile
+`-- .env.example
 ```
 
-Folder summary:
+## Environment
 
-- `cmd/server`: application bootstrap and HTTP server startup
-- `internal/config`: environment variable loading
-- `internal/database`: PostgreSQL and Redis initialization
-- `internal/handler`: request/response layer
-- `internal/middleware`: auth, logging, recovery, rate limiting, instance headers
-- `internal/model`: request, response, and domain models
-- `internal/repository`: PostgreSQL and Redis access
-- `internal/service`: authentication business logic
-- `db`: SQL schema
-- `deploy/nginx`: local load balancer configuration
+Create your local `.env` from the example:
 
-## Auth Flow
+```powershell
+Copy-Item .env.example .env
+```
 
-### Register
+Important variables:
 
-1. Client sends email and password to `POST /auth/register`
-2. Handler validates the request body
-3. Service hashes the password with bcrypt
-4. Repository stores the user in PostgreSQL
-5. Audit log is written
+- `APP_ENV`: use `development` locally and `production` on a VPS
+- `PORT`: app container listens on this port; default is `8080`
+- `DATABASE_URL`: preferred PostgreSQL connection string, for example external RDS/managed PostgreSQL
+- `REDIS_URL`: preferred Redis connection string, for example external ElastiCache/managed Redis
+- `JWT_ACCESS_SECRET`: must be a strong random value in production, at least 32 characters
+- `COOKIE_DOMAIN`: set to your real domain in production
+- `COOKIE_SECURE`: forced to `true` when `APP_ENV=production`
+- `CORS_ALLOWED_ORIGINS`: set explicit frontend origins when cookies/credentials are used
 
-### Login
-
-1. Client sends email and password to `POST /auth/login`
-2. Service verifies credentials against PostgreSQL
-3. A new session is stored in PostgreSQL
-4. A short-lived JWT access token is generated
-5. A refresh token is generated and stored in Redis
-6. Refresh token is returned as an `HttpOnly` cookie
-7. Access token is returned in JSON
-
-### Refresh
-
-1. Client calls `POST /auth/refresh`
-2. Handler reads refresh token from cookie
-3. Service checks refresh token state in Redis
-4. Old refresh token is marked used/revoked during rotation
-5. A new access token and new refresh token are issued
-6. Session `last_used_at` is updated
-
-### Logout
-
-- `POST /auth/logout`: revoke current refresh token and clear cookie
-- `POST /auth/logout-all`: revoke all refresh tokens and all active sessions for the current user
-
-### Session Management
-
-- `GET /auth/sessions`: list active and revoked sessions for the current user
-- `DELETE /auth/sessions/:id`: revoke one session/device
-
-## Data Design
-
-### PostgreSQL
-
-PostgreSQL stores durable data:
-
-- `users`
-- `sessions`
-- `audit_logs`
-
-Schema file:
-
-- [`db/schema.sql`](db/schema.sql)
-
-### Redis
-
-Redis stores fast-changing auth state:
-
-- refresh token metadata
-- refresh token indexes by user and session
-- rate limiting counters
-
-This separation keeps the application instances stateless and ready for horizontal scaling.
-
-## Environment Variables
-
-Core app:
-
-- `PORT`
-- `APP_NAME`
-- `APP_INSTANCE_NAME`
-
-PostgreSQL:
-
-- `DB_HOST`
-- `DB_PORT`
-- `DB_USER`
-- `DB_PASSWORD`
-- `DB_NAME`
-- `DB_SSLMODE`
-
-Redis:
-
-- `REDIS_HOST`
-- `REDIS_PORT`
-- `REDIS_PASSWORD`
-- `REDIS_DB`
-
-JWT and refresh tokens:
-
-- `JWT_ACCESS_SECRET`
-- `JWT_ACCESS_TTL_MINUTES`
-- `REFRESH_TOKEN_TTL_HOURS`
-
-Cookie settings:
-
-- `COOKIE_DOMAIN`
-- `COOKIE_SECURE`
-- `COOKIE_SAMESITE`
-
-Rate limiting:
-
-- `LOGIN_RATE_LIMIT_REQUESTS`
-- `LOGIN_RATE_LIMIT_WINDOW_SECONDS`
-- `REGISTER_RATE_LIMIT_REQUESTS`
-- `REGISTER_RATE_LIMIT_WINDOW_SECONDS`
-- `REFRESH_RATE_LIMIT_REQUESTS`
-- `REFRESH_RATE_LIMIT_WINDOW_SECONDS`
+The older host/port fields (`DB_HOST`, `REDIS_HOST`, and related variables) still work for local/manual runs, but URL-based config is the cleaner production path.
 
 ## Run Locally Without Docker
 
-1. Create PostgreSQL database
-2. Apply schema
-3. Make sure Redis is running
-4. Configure `.env`
-5. Start the server
-
-Example:
+Start PostgreSQL and Redis on your machine, then apply the schema:
 
 ```powershell
-psql -h localhost -U postgres -d "auth_service" -f db/schema.sql
+psql -h localhost -U postgres -d auth_service -f db/schema.sql
 go run ./cmd/server
 ```
 
@@ -207,71 +70,110 @@ Health check:
 curl.exe http://localhost:8080/health
 ```
 
-## Run With Docker Compose
-
-This project includes:
-
-- `postgres`
-- `redis`
-- `app-1`
-- `app-2`
-- `app-3`
-- `nginx`
-
-Start everything:
+With Make:
 
 ```powershell
+make run
+```
+
+## Docker Local Run
+
+The default `docker-compose.yml` is for local development. It runs PostgreSQL, Redis, two app containers, and Nginx.
+
+```powershell
+Copy-Item .env.example .env
 docker compose up --build
 ```
 
-Public ports:
+Public endpoints:
 
 - `http://localhost:8080` -> Nginx load balancer
-- `http://localhost:8081` -> app-1
-- `http://localhost:8082` -> app-2
-- `http://localhost:8083` -> app-3
+- PostgreSQL -> `localhost:5432`
+- Redis -> `localhost:6379`
 
-Direct instance health checks:
-
-```powershell
-curl.exe http://localhost:8081/health
-curl.exe http://localhost:8082/health
-curl.exe http://localhost:8083/health
-```
-
-Load balancer health check:
+Load-balancer check:
 
 ```powershell
 curl.exe -i http://localhost:8080/health
 ```
 
-## Nginx Load Balancing
+With Make:
 
-Nginx is configured in:
+```powershell
+make docker-local
+make logs
+make stop
+```
 
-- [`deploy/nginx/nginx.conf`](deploy/nginx/nginx.conf)
+## Production-Style Docker Run
 
-The `upstream` block groups the three app instances:
+`docker-compose.prod.yml` mirrors a VPS deployment where PostgreSQL and Redis are external services. It only runs:
+
+- `nginx`
+- `app-1`
+- `app-2`
+
+Set production secrets in the VPS environment or `.env` file. Do not commit the real `.env`.
+
+Required production values:
+
+```env
+APP_ENV=production
+DATABASE_URL=postgres://USER:PASSWORD@HOST:5432/DBNAME?sslmode=require
+REDIS_URL=redis://:PASSWORD@HOST:6379/0
+JWT_ACCESS_SECRET=replace-with-a-real-random-secret-at-least-32-chars
+COOKIE_DOMAIN=auth.example.com
+CORS_ALLOWED_ORIGINS=https://example.com
+```
+
+Start production-style:
+
+```powershell
+docker compose -f docker-compose.prod.yml up --build -d
+```
+
+With Make:
+
+```powershell
+make docker-prod
+```
+
+## Nginx
+
+Nginx config lives in:
+
+- `infra/nginx/nginx.conf`
+- `infra/nginx/conf.d/auth.conf`
+
+The upstream load balances traffic across:
 
 - `app-1:8080`
 - `app-2:8080`
-- `app-3:8080`
 
-Because no balancing algorithm is specified, Nginx uses default round robin behavior.
+The app binds to `0.0.0.0:${PORT}`, so it works inside containers and behind a reverse proxy. `/health` returns a small JSON response and does not expose secrets, making it safe for container and proxy health checks.
 
-Round robin test:
+## Contabo VPS and AWS Mapping
 
-```powershell
-1..10 | ForEach-Object { curl.exe -s http://localhost:8080/health }
-```
+This VPS layout intentionally mirrors the later AWS version:
 
-Readable version:
+- Contabo Nginx -> AWS Application Load Balancer
+- Contabo app containers -> ECS tasks
+- External PostgreSQL URL -> RDS PostgreSQL
+- External Redis URL -> ElastiCache Redis
+- VPS `.env`/environment variables -> Secrets Manager
+- Docker healthcheck and `/health` -> ECS/ALB health checks
 
-```powershell
-1..10 | ForEach-Object { curl.exe -s http://localhost:8080/health | ConvertFrom-Json | Select-Object instance_name,timestamp }
-```
+On a real VPS, put Nginx behind HTTPS using your domain and certificate tooling, keep database and Redis private, and expose only the reverse proxy publicly.
 
-You should see requests distributed across `app-1`, `app-2`, and `app-3`.
+## Deployment Notes
+
+- Use `APP_ENV=production` on the VPS.
+- Keep `COOKIE_SECURE=true` in production. The app also forces this when `APP_ENV=production`.
+- Set `COOKIE_DOMAIN` to the domain that should receive the refresh-token cookie.
+- Use `DATABASE_URL` for the external PostgreSQL connection. Use `sslmode=require` when your provider supports TLS.
+- Use `REDIS_URL` for the external Redis connection.
+- Keep secrets in environment variables or a server-side `.env` file that is never committed.
+- Configure the domain and HTTPS at the Nginx/VPS layer before using secure cookies from a browser.
 
 ## Example Requests
 
@@ -299,7 +201,7 @@ curl.exe http://localhost:8080/auth/me `
   -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
 ```
 
-Refresh access token:
+Refresh:
 
 ```powershell
 curl.exe -X POST http://localhost:8080/auth/refresh `
@@ -307,54 +209,15 @@ curl.exe -X POST http://localhost:8080/auth/refresh `
   -c cookies.txt
 ```
 
-Logout current session:
+## Test
 
 ```powershell
-curl.exe -X POST http://localhost:8080/auth/logout `
-  -b cookies.txt `
-  -c cookies.txt
+go test ./...
+go build ./cmd/server
 ```
 
-Logout all sessions:
+or:
 
 ```powershell
-curl.exe -X POST http://localhost:8080/auth/logout-all `
-  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" `
-  -b cookies.txt `
-  -c cookies.txt
+make test
 ```
-
-## Scaling Idea
-
-This service is designed to be stateless at the application layer:
-
-- app instances do not store auth state in memory
-- PostgreSQL stores durable records
-- Redis stores shared runtime auth state
-
-That means:
-
-- login can hit `app-1`
-- refresh can hit `app-3`
-- logout can hit `app-2`
-
-and the system still behaves consistently.
-
-## Current Status
-
-This project is a strong local foundation for:
-
-- JWT auth
-- refresh token rotation
-- session/device management
-- load balancing
-- future Redis hardening
-- future cloud deployment
-
-Good next steps:
-
-- HTTPS and secure cookie behavior for non-local environments
-- migration tooling
-- access-token revocation strategy
-- observability and tracing
-- deployment to AWS or Kubernetes

@@ -55,6 +55,12 @@ type SessionDeleteResponse struct {
 	Message string `json:"message"`
 }
 
+type APIError struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
 type ErrorResponse struct {
-	Error string `json:"error"`
+	Error     APIError `json:"error"`
+	RequestID string   `json:"request_id,omitempty"`
 }

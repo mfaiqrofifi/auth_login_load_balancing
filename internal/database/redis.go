@@ -10,11 +10,21 @@ import (
 )
 
 func NewRedisClient(cfg config.Config) (*redis.Client, error) {
-	client := redis.NewClient(&redis.Options{
+	options := &redis.Options{
 		Addr:     fmt.Sprintf("%s:%s", cfg.RedisHost, cfg.RedisPort),
 		Password: cfg.RedisPassword,
 		DB:       cfg.RedisDB,
-	})
+	}
+
+	if cfg.RedisURL != "" {
+		parsedOptions, err := redis.ParseURL(cfg.RedisURL)
+		if err != nil {
+			return nil, err
+		}
+		options = parsedOptions
+	}
+
+	client := redis.NewClient(options)
 
 	if err := client.Ping(context.Background()).Err(); err != nil {
 		_ = client.Close()

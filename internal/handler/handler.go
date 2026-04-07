@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -18,15 +19,17 @@ const refreshTokenCookieName = "refresh_token"
 
 type Handler struct {
 	config           config.Config
+	logger           *slog.Logger
 	healthService    *service.HealthService
 	authService      *service.AuthService
 	tokenService     *service.TokenService
 	rateLimitService *service.RateLimitService
 }
 
-func NewHandler(cfg config.Config, healthService *service.HealthService, authService *service.AuthService, tokenService *service.TokenService, rateLimitService *service.RateLimitService) *Handler {
+func NewHandler(cfg config.Config, logger *slog.Logger, healthService *service.HealthService, authService *service.AuthService, tokenService *service.TokenService, rateLimitService *service.RateLimitService) *Handler {
 	return &Handler{
 		config:           cfg,
+		logger:           logger,
 		healthService:    healthService,
 		authService:      authService,
 		tokenService:     tokenService,
@@ -64,9 +67,7 @@ func (h *Handler) Routes() http.Handler {
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasPrefix(r.URL.Path, "/auth/sessions/") && r.URL.Path != "/" && r.URL.Path != "/health" && r.URL.Path != "/auth/login" && r.URL.Path != "/auth/register" && r.URL.Path != "/auth/refresh" && r.URL.Path != "/auth/logout" && r.URL.Path != "/auth/logout-all" && r.URL.Path != "/auth/sessions" && r.URL.Path != "/auth/me" {
-			writeJSON(w, http.StatusNotFound, model.ErrorResponse{
-				Error: "route not found",
-			})
+			writeError(w, r, http.StatusNotFound, "route_not_found", "route not found")
 			return
 		}
 
@@ -75,17 +76,19 @@ func (h *Handler) Routes() http.Handler {
 
 	return middleware.Chain(
 		handler,
+		middleware.RequestID,
 		middleware.InstanceHeader(h.config.InstanceName),
-		middleware.Recoverer,
-		middleware.RequestLogger,
+		middleware.SecurityHeaders,
+		middleware.CORS(h.config.CORSAllowedOrigins, h.config.CORSAllowedMethods, h.config.CORSAllowedHeaders, h.config.CORSAllowCredentials),
+		middleware.RequestLogger(h.logger),
+		middleware.Timeout(time.Duration(h.config.RequestTimeoutSec)*time.Second),
+		middleware.Recoverer(h.logger),
 	)
 }
 
 func (h *Handler) handleRoot(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		writeJSON(w, http.StatusMethodNotAllowed, model.ErrorResponse{
-			Error: "method not allowed",
-		})
+		writeError(w, r, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
 		return
 	}
 
@@ -98,9 +101,7 @@ func (h *Handler) handleRoot(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		writeJSON(w, http.StatusMethodNotAllowed, model.ErrorResponse{
-			Error: "method not allowed",
-		})
+		writeError(w, r, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
 		return
 	}
 
@@ -114,17 +115,13 @@ func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handleMe(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		writeJSON(w, http.StatusMethodNotAllowed, model.ErrorResponse{
-			Error: "method not allowed",
-		})
+		writeError(w, r, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
 		return
 	}
 
 	identity, ok := middleware.GetAuthIdentity(r.Context())
 	if !ok {
-		writeJSON(w, http.StatusUnauthorized, model.ErrorResponse{
-			Error: "unauthorized",
-		})
+		writeError(w, r, http.StatusUnauthorized, "unauthorized", "unauthorized")
 		return
 	}
 
@@ -136,25 +133,19 @@ func (h *Handler) handleMe(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handleSessions(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		writeJSON(w, http.StatusMethodNotAllowed, model.ErrorResponse{
-			Error: "method not allowed",
-		})
+		writeError(w, r, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
 		return
 	}
 
 	identity, ok := middleware.GetAuthIdentity(r.Context())
 	if !ok {
-		writeJSON(w, http.StatusUnauthorized, model.ErrorResponse{
-			Error: "unauthorized",
-		})
+		writeError(w, r, http.StatusUnauthorized, "unauthorized", "unauthorized")
 		return
 	}
 
 	response, err := h.authService.ListSessions(r.Context(), identity.UserID)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, model.ErrorResponse{
-			Error: err.Error(),
-		})
+		writeError(w, r, http.StatusInternalServerError, "list_sessions_failed", "failed to list sessions")
 		return
 	}
 
@@ -163,25 +154,19 @@ func (h *Handler) handleSessions(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handleSessionByID(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodDelete {
-		writeJSON(w, http.StatusMethodNotAllowed, model.ErrorResponse{
-			Error: "method not allowed",
-		})
+		writeError(w, r, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
 		return
 	}
 
 	identity, ok := middleware.GetAuthIdentity(r.Context())
 	if !ok {
-		writeJSON(w, http.StatusUnauthorized, model.ErrorResponse{
-			Error: "unauthorized",
-		})
+		writeError(w, r, http.StatusUnauthorized, "unauthorized", "unauthorized")
 		return
 	}
 
 	sessionID := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/auth/sessions/"))
 	if sessionID == "" {
-		writeJSON(w, http.StatusBadRequest, model.ErrorResponse{
-			Error: "session id is required",
-		})
+		writeError(w, r, http.StatusBadRequest, "session_id_required", "session id is required")
 		return
 	}
 
@@ -192,9 +177,7 @@ func (h *Handler) handleSessionByID(w http.ResponseWriter, r *http.Request) {
 			statusCode = http.StatusUnauthorized
 		}
 
-		writeJSON(w, statusCode, model.ErrorResponse{
-			Error: err.Error(),
-		})
+		writeError(w, r, statusCode, "revoke_session_failed", err.Error())
 		return
 	}
 
@@ -203,9 +186,7 @@ func (h *Handler) handleSessionByID(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handleRegister(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeJSON(w, http.StatusMethodNotAllowed, model.ErrorResponse{
-			Error: "method not allowed",
-		})
+		writeError(w, r, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
 		return
 	}
 
@@ -217,15 +198,11 @@ func (h *Handler) handleRegister(w http.ResponseWriter, r *http.Request) {
 
 	if err := decoder.Decode(&request); err != nil {
 		if errors.Is(err, io.EOF) {
-			writeJSON(w, http.StatusBadRequest, model.ErrorResponse{
-				Error: "request body is required",
-			})
+			writeError(w, r, http.StatusBadRequest, "request_body_required", "request body is required")
 			return
 		}
 
-		writeJSON(w, http.StatusBadRequest, model.ErrorResponse{
-			Error: "invalid JSON request body",
-		})
+		writeError(w, r, http.StatusBadRequest, "invalid_json", "invalid JSON request body")
 		return
 	}
 
@@ -233,9 +210,7 @@ func (h *Handler) handleRegister(w http.ResponseWriter, r *http.Request) {
 	request.Password = strings.TrimSpace(request.Password)
 
 	if request.Email == "" || request.Password == "" {
-		writeJSON(w, http.StatusBadRequest, model.ErrorResponse{
-			Error: "email and password are required",
-		})
+		writeError(w, r, http.StatusBadRequest, "email_password_required", "email and password are required")
 		return
 	}
 
@@ -249,9 +224,7 @@ func (h *Handler) handleRegister(w http.ResponseWriter, r *http.Request) {
 			statusCode = http.StatusConflict
 		}
 
-		writeJSON(w, statusCode, model.ErrorResponse{
-			Error: err.Error(),
-		})
+		writeError(w, r, statusCode, "register_failed", err.Error())
 		return
 	}
 
@@ -260,17 +233,13 @@ func (h *Handler) handleRegister(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeJSON(w, http.StatusMethodNotAllowed, model.ErrorResponse{
-			Error: "method not allowed",
-		})
+		writeError(w, r, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
 		return
 	}
 
 	refreshToken, err := h.readRefreshTokenCookie(r)
 	if err != nil {
-		writeJSON(w, http.StatusUnauthorized, model.ErrorResponse{
-			Error: "missing or invalid refresh token cookie",
-		})
+		writeError(w, r, http.StatusUnauthorized, "invalid_refresh_cookie", "missing or invalid refresh token cookie")
 		return
 	}
 
@@ -284,9 +253,7 @@ func (h *Handler) handleRefresh(w http.ResponseWriter, r *http.Request) {
 			statusCode = http.StatusUnauthorized
 		}
 
-		writeJSON(w, statusCode, model.ErrorResponse{
-			Error: err.Error(),
-		})
+		writeError(w, r, statusCode, "refresh_failed", err.Error())
 		return
 	}
 
@@ -296,9 +263,7 @@ func (h *Handler) handleRefresh(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handleLogout(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeJSON(w, http.StatusMethodNotAllowed, model.ErrorResponse{
-			Error: "method not allowed",
-		})
+		writeError(w, r, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
 		return
 	}
 
@@ -306,9 +271,7 @@ func (h *Handler) handleLogout(w http.ResponseWriter, r *http.Request) {
 
 	response, err := h.authService.Logout(r.Context(), refreshToken, h.requestMetadata(r))
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, model.ErrorResponse{
-			Error: err.Error(),
-		})
+		writeError(w, r, http.StatusInternalServerError, "logout_failed", "failed to logout")
 		return
 	}
 
@@ -318,25 +281,19 @@ func (h *Handler) handleLogout(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handleLogoutAll(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeJSON(w, http.StatusMethodNotAllowed, model.ErrorResponse{
-			Error: "method not allowed",
-		})
+		writeError(w, r, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
 		return
 	}
 
 	identity, ok := middleware.GetAuthIdentity(r.Context())
 	if !ok {
-		writeJSON(w, http.StatusUnauthorized, model.ErrorResponse{
-			Error: "unauthorized",
-		})
+		writeError(w, r, http.StatusUnauthorized, "unauthorized", "unauthorized")
 		return
 	}
 
 	response, err := h.authService.LogoutAll(r.Context(), identity.UserID, h.requestMetadata(r))
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, model.ErrorResponse{
-			Error: err.Error(),
-		})
+		writeError(w, r, http.StatusInternalServerError, "logout_all_failed", "failed to logout from all devices")
 		return
 	}
 
@@ -346,9 +303,7 @@ func (h *Handler) handleLogoutAll(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeJSON(w, http.StatusMethodNotAllowed, model.ErrorResponse{
-			Error: "method not allowed",
-		})
+		writeError(w, r, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
 		return
 	}
 
@@ -360,15 +315,11 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 	if err := decoder.Decode(&request); err != nil {
 		if errors.Is(err, io.EOF) {
-			writeJSON(w, http.StatusBadRequest, model.ErrorResponse{
-				Error: "request body is required",
-			})
+			writeError(w, r, http.StatusBadRequest, "request_body_required", "request body is required")
 			return
 		}
 
-		writeJSON(w, http.StatusBadRequest, model.ErrorResponse{
-			Error: "invalid JSON request body",
-		})
+		writeError(w, r, http.StatusBadRequest, "invalid_json", "invalid JSON request body")
 		return
 	}
 
@@ -376,9 +327,7 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 	request.Password = strings.TrimSpace(request.Password)
 
 	if request.Email == "" || request.Password == "" {
-		writeJSON(w, http.StatusBadRequest, model.ErrorResponse{
-			Error: "email and password are required",
-		})
+		writeError(w, r, http.StatusBadRequest, "email_password_required", "email and password are required")
 		return
 	}
 
@@ -392,9 +341,7 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 			statusCode = http.StatusUnauthorized
 		}
 
-		writeJSON(w, statusCode, model.ErrorResponse{
-			Error: err.Error(),
-		})
+		writeError(w, r, statusCode, "login_failed", err.Error())
 		return
 	}
 
@@ -403,6 +350,8 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) setRefreshTokenCookie(w http.ResponseWriter, refreshToken string) {
+	expiresAt := time.Now().UTC().Add(time.Duration(h.config.RefreshTokenTTLHours) * time.Hour)
+
 	http.SetCookie(w, &http.Cookie{
 		Name:     refreshTokenCookieName,
 		Value:    refreshToken,
@@ -412,6 +361,7 @@ func (h *Handler) setRefreshTokenCookie(w http.ResponseWriter, refreshToken stri
 		Secure:   h.config.CookieSecure,
 		SameSite: parseSameSite(h.config.CookieSameSite),
 		MaxAge:   h.config.RefreshTokenTTLHours * 60 * 60,
+		Expires:  expiresAt,
 	})
 }
 
@@ -455,14 +405,25 @@ func parseSameSite(value string) http.SameSite {
 
 func (h *Handler) requestMetadata(r *http.Request) model.RequestMetadata {
 	userAgent := strings.TrimSpace(r.UserAgent())
-	ipAddress := strings.TrimSpace(r.Header.Get("X-Forwarded-For"))
-	if ipAddress == "" {
-		ipAddress = strings.TrimSpace(r.RemoteAddr)
-	}
+	ipAddress := resolveClientIP(r, h.config.TrustProxyHeaders)
 
 	return model.RequestMetadata{
 		UserAgent:  userAgent,
 		DeviceName: userAgent,
 		IPAddress:  ipAddress,
 	}
+}
+
+func resolveClientIP(r *http.Request, trustProxyHeaders bool) string {
+	if trustProxyHeaders {
+		forwardedFor := strings.TrimSpace(r.Header.Get("X-Forwarded-For"))
+		if forwardedFor != "" {
+			parts := strings.Split(forwardedFor, ",")
+			if len(parts) > 0 && strings.TrimSpace(parts[0]) != "" {
+				return strings.TrimSpace(parts[0])
+			}
+		}
+	}
+
+	return strings.TrimSpace(r.RemoteAddr)
 }
