@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"load_balancing_project_auth/internal/model"
 	"load_balancing_project_auth/internal/service"
 )
 
@@ -17,17 +16,13 @@ func RateLimit(rateLimitService *service.RateLimitService, scope string, limit i
 			identifier := rateLimitIdentifier(r)
 			result, err := rateLimitService.Allow(r.Context(), scope, identifier, limit, window)
 			if err != nil {
-				writeJSON(w, http.StatusInternalServerError, model.ErrorResponse{
-					Error: "rate limit check failed",
-				})
+				writeError(w, r, http.StatusInternalServerError, "rate_limit_check_failed", "rate limit check failed")
 				return
 			}
 
 			if !result.Allowed {
 				w.Header().Set("Retry-After", formatRetryAfter(result.ResetIn))
-				writeJSON(w, http.StatusTooManyRequests, model.ErrorResponse{
-					Error: "too many requests, please try again later",
-				})
+				writeError(w, r, http.StatusTooManyRequests, "rate_limit_exceeded", "too many requests, please try again later")
 				return
 			}
 

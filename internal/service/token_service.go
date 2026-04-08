@@ -17,13 +17,17 @@ type TokenService struct {
 	accessSecret     []byte
 	accessTTLMinutes int
 	refreshTTLHours  int
+	issuer           string
+	audience         string
 }
 
-func NewTokenService(accessSecret string, accessTTLMinutes int, refreshTTLHours int) *TokenService {
+func NewTokenService(accessSecret string, accessTTLMinutes int, refreshTTLHours int, issuer, audience string) *TokenService {
 	return &TokenService{
 		accessSecret:     []byte(accessSecret),
 		accessTTLMinutes: accessTTLMinutes,
 		refreshTTLHours:  refreshTTLHours,
+		issuer:           issuer,
+		audience:         audience,
 	}
 }
 
@@ -35,7 +39,10 @@ func (s *TokenService) GenerateAccessToken(userID, email string) (string, int64,
 		"sub":   userID,
 		"email": email,
 		"iat":   now.Unix(),
+		"nbf":   now.Unix(),
 		"exp":   expiresAt.Unix(),
+		"iss":   s.issuer,
+		"aud":   []string{s.audience},
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
@@ -48,13 +55,20 @@ func (s *TokenService) GenerateAccessToken(userID, email string) (string, int64,
 }
 
 func (s *TokenService) ValidateAccessToken(accessToken string) (model.AuthIdentity, error) {
-	token, err := jwt.Parse(accessToken, func(token *jwt.Token) (any, error) {
-		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-			return nil, ErrInvalidToken
-		}
+	token, err := jwt.Parse(
+		accessToken,
+		func(token *jwt.Token) (any, error) {
+			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+				return nil, ErrInvalidToken
+			}
 
-		return s.accessSecret, nil
-	})
+			return s.accessSecret, nil
+		},
+		jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}),
+		jwt.WithIssuer(s.issuer),
+		jwt.WithAudience(s.audience),
+		jwt.WithLeeway(30*time.Second),
+	)
 	if err != nil || !token.Valid {
 		return model.AuthIdentity{}, ErrInvalidToken
 	}

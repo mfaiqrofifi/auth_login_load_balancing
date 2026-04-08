@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -18,16 +18,21 @@ import (
 
 func main() {
 	cfg := config.Load()
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+		Level: cfg.LogLevel,
+	}))
 
 	db, err := database.NewPostgresConnection(cfg)
 	if err != nil {
-		log.Fatalf("database connection failed: %v", err)
+		logger.Error("database connection failed", slog.Any("error", err))
+		os.Exit(1)
 	}
 	defer db.Close()
 
 	redisClient, err := database.NewRedisClient(cfg)
 	if err != nil {
-		log.Fatalf("redis connection failed: %v", err)
+		logger.Error("redis connection failed", slog.Any("error", err))
+		os.Exit(1)
 	}
 	defer redisClient.Close()
 
@@ -37,14 +42,14 @@ func main() {
 	auditLogRepository := repository.NewPostgresAuditLogRepository(db)
 	refreshTokenRepository := repository.NewRedisRefreshTokenRepository(redisClient)
 	healthService := service.NewHealthService(systemRepository)
-	tokenService := service.NewTokenService(cfg.JWTAccessSecret, cfg.JWTAccessTTLMinutes, cfg.RefreshTokenTTLHours)
+	tokenService := service.NewTokenService(cfg.JWTAccessSecret, cfg.JWTAccessTTLMinutes, cfg.RefreshTokenTTLHours, cfg.JWTIssuer, cfg.JWTAudience)
 	rateLimitService := service.NewRateLimitService(redisClient)
 	auditService := service.NewAuditService(auditLogRepository)
 	authService := service.NewAuthService(userRepository, sessionRepository, refreshTokenRepository, tokenService, auditService)
-	httpHandler := handler.NewHandler(cfg, healthService, authService, tokenService, rateLimitService)
+	httpHandler := handler.NewHandler(cfg, logger, healthService, authService, tokenService, rateLimitService)
 
 	server := &http.Server{
-		Addr:              ":" + cfg.Port,
+		Addr:              "0.0.0.0:" + cfg.Port,
 		Handler:           httpHandler.Routes(),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
@@ -53,9 +58,15 @@ func main() {
 	}
 
 	go func() {
-		log.Printf("%s is running on port %s", cfg.AppName, cfg.Port)
+		logger.Info("server starting",
+			slog.String("app_name", cfg.AppName),
+			slog.String("app_env", cfg.AppEnv),
+			slog.String("port", cfg.Port),
+			slog.String("instance_name", cfg.InstanceName),
+		)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("server failed: %v", err)
+			logger.Error("server failed", slog.Any("error", err))
+			os.Exit(1)
 		}
 	}()
 
@@ -63,12 +74,13 @@ func main() {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(cfg.ShutdownTimeoutSec)*time.Second)
 	defer cancel()
 
 	if err := server.Shutdown(ctx); err != nil {
-		log.Fatalf("graceful shutdown failed: %v", err)
+		logger.Error("graceful shutdown failed", slog.Any("error", err))
+		os.Exit(1)
 	}
 
-	log.Printf("%s stopped cleanly", cfg.AppName)
+	logger.Info("server stopped cleanly", slog.String("app_name", cfg.AppName))
 }
