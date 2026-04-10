@@ -12,6 +12,25 @@ A production-ready Go authentication service with PostgreSQL, Redis, Docker, and
 - JSON responses, request IDs, structured logs, timeouts, and recovery middleware
 - Docker image healthcheck and Nginx reverse proxy/load balancer
 
+## Documentation
+
+- OpenAPI spec: [`docs/openapi.yaml`](docs/openapi.yaml)
+- Runbook: [`docs/RUNBOOK.md`](docs/RUNBOOK.md)
+- Load-balancing proof script for Bash: [`docs/scripts/prove-load-balancing.sh`](docs/scripts/prove-load-balancing.sh)
+- Load-balancing proof script for PowerShell: [`docs/scripts/prove-load-balancing.ps1`](docs/scripts/prove-load-balancing.ps1)
+
+Run Swagger UI locally:
+
+```powershell
+docker compose -f docker-compose.docs.yml up -d
+```
+
+Then open:
+
+```text
+http://localhost:8090
+```
+
 ## Project Structure
 
 ```text
