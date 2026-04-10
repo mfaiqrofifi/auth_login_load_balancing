@@ -28,7 +28,7 @@ docker compose -f docker-compose.docs.yml up -d
 Then open:
 
 ```text
-http://localhost:8090/docs
+http://localhost:8090
 ```
 
 ## Project Structure

@@ -27,9 +27,11 @@ docker compose -f docker-compose.docs.yml up -d
 
 Open:
 
-- `http://localhost:8090/docs`
+- `http://localhost:8090`
 
 The UI reads [`docs/openapi.yaml`](openapi.yaml), which already includes both local and cloud server options.
+For browser-based "Try it out" requests, local CORS must include `http://localhost:8090`.
+Swagger UI also auto-stores the `access_token` from `/auth/login` and `/auth/refresh`, then reuses it for protected bearer-token endpoints such as `/auth/me` and `/auth/sessions`.
 
 ## Diagrams
 
@@ -95,6 +97,7 @@ Local mode services:
 - Nginx on `http://localhost:8080`
 - PostgreSQL on `localhost:5432`
 - Redis on `localhost:6379`
+- Swagger UI cross-origin testing works because local CORS includes `http://localhost:8090`
 
 ## Production-Style Local Simulation
 

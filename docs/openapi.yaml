@@ -61,6 +61,7 @@ paths:
     post:
       tags: [Authentication]
       summary: Register a user
+      description: Use a unique email address for each registration attempt. Reusing the same email returns `409 Conflict`.
       requestBody:
         required: true
         content:
@@ -70,7 +71,7 @@ paths:
             examples:
               default:
                 value:
-                  email: user@example.com
+                  email: swagger-register-demo@example.com
                   password: strong-password
       responses:
         "201":
@@ -102,7 +103,7 @@ paths:
             examples:
               default:
                 value:
-                  email: user@example.com
+                  email: swagger-register-demo@example.com
                   password: strong-password
       responses:
         "200":

@@ -4,8 +4,6 @@ services:
     restart: unless-stopped
     ports:
       - "8090:8080"
-    environment:
-      SWAGGER_JSON: /spec/openapi.yaml
-      BASE_URL: /docs
     volumes:
-      - ./docs/openapi.yaml:/spec/openapi.yaml:ro
+      - ./docs/openapi.yaml:/usr/share/nginx/html/openapi.yaml:ro
+      - ./docs/swagger-ui/swagger-initializer.js:/usr/share/nginx/html/swagger-initializer.js:ro
