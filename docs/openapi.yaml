@@ -1,0 +1,444 @@
+openapi: 3.0.3
+info:
+  title: Auth Login Load Balancing API
+  version: 1.0.0
+  description: |
+    Authentication API with stateless app instances behind Nginx load balancing,
+    PostgreSQL persistence, and Redis-backed refresh token and rate limiting state.
+
+    This spec includes two common usage modes:
+    - Local Docker stack via `docker-compose.yml`
+    - Cloud or VPS deployment via `docker-compose.prod.yml`
+servers:
+  - url: http://localhost:8080
+    description: Local Docker load balancer
+  - url: http://localhost:8081
+    description: Local production-style Nginx mapping example
+  - url: https://{host}
+    description: Cloud or VPS deployment
+    variables:
+      host:
+        default: auth.example.com
+        description: Public auth hostname
+tags:
+  - name: System
+  - name: Authentication
+  - name: Sessions
+paths:
+  /:
+    get:
+      tags: [System]
+      summary: Root endpoint
+      description: Returns a simple service banner including the responding instance name.
+      responses:
+        "200":
+          description: Service is reachable
+          headers:
+            X-App-Instance:
+              $ref: "#/components/headers/XAppInstance"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RootResponse"
+  /health:
+    get:
+      tags: [System]
+      summary: Health check
+      description: |
+        Lightweight health endpoint used by container and reverse-proxy health checks.
+        When called through Nginx repeatedly it can be used to demonstrate load balancing.
+      responses:
+        "200":
+          description: Healthy
+          headers:
+            X-App-Instance:
+              $ref: "#/components/headers/XAppInstance"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+  /auth/register:
+    post:
+      tags: [Authentication]
+      summary: Register a user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterRequest"
+            examples:
+              default:
+                value:
+                  email: user@example.com
+                  password: strong-password
+      responses:
+        "201":
+          description: User created
+          headers:
+            X-App-Instance:
+              $ref: "#/components/headers/XAppInstance"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RegisterResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "409":
+          $ref: "#/components/responses/ErrorResponse"
+  /auth/login:
+    post:
+      tags: [Authentication]
+      summary: Login a user
+      description: |
+        Returns an access token in the JSON response and sets the refresh token in an
+        HttpOnly cookie.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+            examples:
+              default:
+                value:
+                  email: user@example.com
+                  password: strong-password
+      responses:
+        "200":
+          description: Login successful
+          headers:
+            Set-Cookie:
+              description: HttpOnly refresh token cookie
+              schema:
+                type: string
+            X-App-Instance:
+              $ref: "#/components/headers/XAppInstance"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/ErrorResponse"
+  /auth/refresh:
+    post:
+      tags: [Authentication]
+      summary: Refresh access token
+      description: Requires the `refresh_token` cookie set during login.
+      security:
+        - refreshTokenCookie: []
+      responses:
+        "200":
+          description: Access token refreshed
+          headers:
+            Set-Cookie:
+              description: Rotated refresh token cookie
+              schema:
+                type: string
+            X-App-Instance:
+              $ref: "#/components/headers/XAppInstance"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RefreshResponse"
+        "401":
+          $ref: "#/components/responses/ErrorResponse"
+  /auth/logout:
+    post:
+      tags: [Authentication]
+      summary: Logout current session
+      description: Clears the refresh token cookie if it exists.
+      security:
+        - refreshTokenCookie: []
+      responses:
+        "200":
+          description: Logout successful
+          headers:
+            Set-Cookie:
+              description: Cleared refresh token cookie
+              schema:
+                type: string
+            X-App-Instance:
+              $ref: "#/components/headers/XAppInstance"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+  /auth/logout-all:
+    post:
+      tags: [Authentication]
+      summary: Logout from all sessions
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: All sessions revoked
+          headers:
+            Set-Cookie:
+              description: Cleared refresh token cookie
+              schema:
+                type: string
+            X-App-Instance:
+              $ref: "#/components/headers/XAppInstance"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+        "401":
+          $ref: "#/components/responses/ErrorResponse"
+  /auth/me:
+    get:
+      tags: [Authentication]
+      summary: Get current user
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Authenticated identity
+          headers:
+            X-App-Instance:
+              $ref: "#/components/headers/XAppInstance"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MeResponse"
+        "401":
+          $ref: "#/components/responses/ErrorResponse"
+  /auth/sessions:
+    get:
+      tags: [Sessions]
+      summary: List active and historical sessions
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Session list
+          headers:
+            X-App-Instance:
+              $ref: "#/components/headers/XAppInstance"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionsResponse"
+        "401":
+          $ref: "#/components/responses/ErrorResponse"
+  /auth/sessions/{sessionId}:
+    delete:
+      tags: [Sessions]
+      summary: Revoke a session by id
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          description: Session identifier returned by the list sessions endpoint
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Session revoked
+          headers:
+            X-App-Instance:
+              $ref: "#/components/headers/XAppInstance"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/ErrorResponse"
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    refreshTokenCookie:
+      type: apiKey
+      in: cookie
+      name: refresh_token
+  headers:
+    XAppInstance:
+      description: The app instance that processed the request
+      schema:
+        type: string
+        example: app-1
+  responses:
+    ErrorResponse:
+      description: Structured API error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+          examples:
+            invalid:
+              value:
+                error:
+                  code: invalid_access_token
+                  message: invalid token
+                request_id: req-123
+  schemas:
+    RootResponse:
+      type: object
+      required: [message, app_name, instance_name]
+      properties:
+        message:
+          type: string
+          example: authentication service base is running
+        app_name:
+          type: string
+          example: auth-service
+        instance_name:
+          type: string
+          example: app-1
+    HealthResponse:
+      type: object
+      required: [status, timestamp, instance_name]
+      properties:
+        status:
+          type: string
+          example: ok
+        timestamp:
+          type: string
+          format: date-time
+        instance_name:
+          type: string
+          example: app-2
+    RegisterRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          minLength: 1
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          minLength: 1
+    RegisterResponse:
+      type: object
+      required: [message, user_id, email, is_email_verified]
+      properties:
+        message:
+          type: string
+          example: registration successful
+        user_id:
+          type: string
+          example: 69c6cc04-6731-4f33-840d-159a166c4488
+        email:
+          type: string
+          format: email
+        is_email_verified:
+          type: boolean
+          example: false
+    LoginResponse:
+      type: object
+      required: [message, access_token, token_type, expires_in]
+      properties:
+        message:
+          type: string
+          example: login successful
+        access_token:
+          type: string
+        token_type:
+          type: string
+          example: Bearer
+        expires_in:
+          type: integer
+          format: int64
+          example: 900
+    RefreshResponse:
+      type: object
+      required: [message, access_token, token_type, expires_in]
+      properties:
+        message:
+          type: string
+          example: token refreshed successfully
+        access_token:
+          type: string
+        token_type:
+          type: string
+          example: Bearer
+        expires_in:
+          type: integer
+          format: int64
+          example: 900
+    MeResponse:
+      type: object
+      required: [user_id, email]
+      properties:
+        user_id:
+          type: string
+        email:
+          type: string
+          format: email
+    Session:
+      type: object
+      required:
+        - session_id
+        - user_id
+        - device_name
+        - ip_address
+        - status
+        - created_at
+        - last_used_at
+      properties:
+        session_id:
+          type: string
+        user_id:
+          type: string
+        device_name:
+          type: string
+        ip_address:
+          type: string
+        status:
+          type: string
+          example: ACTIVE
+        created_at:
+          type: string
+          format: date-time
+        last_used_at:
+          type: string
+          format: date-time
+    SessionsResponse:
+      type: object
+      required: [sessions]
+      properties:
+        sessions:
+          type: array
+          items:
+            $ref: "#/components/schemas/Session"
+    MessageResponse:
+      type: object
+      required: [message]
+      properties:
+        message:
+          type: string
+          example: logout successful
+    ErrorEnvelope:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+        request_id:
+          type: string
